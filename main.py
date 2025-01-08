@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import threading
 import time
-import os
+
 from typing import Union, Tuple, Optional, List
 
 
@@ -140,6 +140,8 @@ class VideoProcessor:
             cv2.imshow('Frame', current_frame)
             cv2.imshow('Edges', edge_frame)
 
+            self._frame_ready.set()  # Сигнализируем о готовности фрейма.
+
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 self.is_running = False
                 break
@@ -206,6 +208,7 @@ class SpeedTracker:
         self.update_frequency = update_frequency
         self.speed_lock = threading.Lock()
         self.speed_update_event = threading.Event()
+        self.video_frame_ready_event = video_processor._frame_ready
         self.timer = CustomTimer(update_frequency, self.speed_update_event)
         self.speed_thread = threading.Thread(target=self.update_speed)
         self.speed_thread.daemon = True
@@ -291,11 +294,11 @@ def print_speed(speed_tracker: SpeedTracker):
     Выводит текущую скорость в консоль.
     """
     while True:
-        speed_tracker.video_processor.get_frames_from_buffer().wait()
-        speed_tracker.speed_update_event.set()
+        speed_tracker.video_frame_ready_event.wait()  # Ожидание события готовности кадра
+        speed_tracker.speed_update_event.set()  # Разрешаем обновление скорости
         current_speed = speed_tracker.get_speed()
         print(f'Текущая скорость: {current_speed:.2f} м/с')
-        speed_tracker.video_processor.get_frames_from_buffer().clear()
+        speed_tracker.video_frame_ready_event.clear()  # Сбрасываем событие
         speed_tracker.speed_update_event.clear()
 
 
@@ -327,13 +330,18 @@ def main():
     st.set_distance(distance)
 
     # Запуск потока для вывода скорости
-    speed_thread = threading.Thread(target=print_speed, args=(st,))
+    speed_thread = threading.Thread(target=st.update_speed)
     speed_thread.daemon = True
     speed_thread.start()
 
+    print_speed_thread = threading.Thread(target=print_speed, args=(st,))
+    print_speed_thread.daemon = True
+    print_speed_thread.start()
+
     try:
         while vp.is_running:
-            pass
+            vp.get_frames_from_buffer().wait()  # Ожидание фрейма
+            vp.get_frames_from_buffer().clear()
     except Exception as e:
         print(f"Произошла ошибка: {e}")
     finally:
